@@ -33,7 +33,7 @@ class Config:
     align_init_std: float = 0.001  # variance 0.001^2, for W_a and U_a
 
     # data
-    train_data: int = 6000
+    train_pairs: int = 6000
     valid_pairs: int = 300
     min_phrases: int = 2
     max_phrases: int = 5
@@ -155,40 +155,47 @@ def iterate_batches(data, cfg):
         for b in range(0, len(chunk), cfg.batch_size):
             yield collate(chunk[b : b + cfg.batch_size])
 
+
 ###############################
 # Model
 ###############################
 
+
 class GatedUnit(nn.Module):
-    def __init__(self,input_dim,n,context_dim = 0):
+    def __init__(self, input_dim, n, context_dim=0):
         super().__init__()
-        self.W = nn.Linear(input_dim, 3 * n) 
+        self.W = nn.Linear(input_dim, 3 * n)
         self.U_zr = nn.Linear(n, 2 * n, bias=False)  # holds the weights for both gates
-        self.U = nn.Linear(n, n, bias=False) # U holds the weight for the candidate state
+        self.U = nn.Linear(
+            n, n, bias=False
+        )  # U holds the weight for the candidate state
         self.C = nn.Linear(context_dim, 3 * n, bias=False) if context_dim else None
 
-    def forward(self,x,h_prev,c=None):
+    def forward(self, x, h_prev, c=None):
         """
         it takes the input x and the previous state h_prev and returns the new state
         z: is the update gate
         r: is the reset gate
         """
-        proj = self.W(x)                          # W_z x, W_r x, W x (plus biases), stacked
+        proj = self.W(x)  # W_z x, W_r x, W x (plus biases), stacked
         if self.C is not None:
-            proj = proj + self.C(c)               # decoder only: add C_z c, C_r c, C c
-        p_z, p_r, p_h = proj.chunk(3, dim=-1)     # split input parts for z, r, candidate
-        u_z, u_r = self.U_zr(h_prev).chunk(2, dim=-1)   # U_z h, U_r h
+            proj = proj + self.C(c)  # decoder only: add C_z c, C_r c, C c
+        p_z, p_r, p_h = proj.chunk(3, dim=-1)  # split input parts for z, r, candidate
+        u_z, u_r = self.U_zr(h_prev).chunk(2, dim=-1)  # U_z h, U_r h
 
-        z = torch.sigmoid(p_z + u_z)              # update gate
-        r = torch.sigmoid(p_r + u_r)              # reset gate
+        z = torch.sigmoid(p_z + u_z)  # update gate
+        r = torch.sigmoid(p_r + u_r)  # reset gate
         h_tilde = torch.tanh(p_h + self.U(r * h_prev))  # candidate, reset before U
-        return (1 - z) * h_prev + z * h_tilde     # blend old and new
+        return (1 - z) * h_prev + z * h_tilde  # blend old and new
+
 
 class Encoder(nn.Module):
     def __init__(self, K_x, cfg):
         super().__init__()
         self.n = cfg.n
-        self.embedding = nn.Embedding(K_x, cfg.m, padding_idx=PAD)  # shared by both directions
+        self.embedding = nn.Embedding(
+            K_x, cfg.m, padding_idx=PAD
+        )  # shared by both directions
         self.forward_rnn = GatedUnit(cfg.m, cfg.n)
         self.backward_rnn = GatedUnit(cfg.m, cfg.n)
 
@@ -200,18 +207,21 @@ class Encoder(nn.Module):
         fwd = []
         for j in range(T_x):
             h_new = self.forward_rnn(emb[:, j], h)
-            h = torch.where(src_mask[:, j : j + 1], h_new, h)  # keep old state on padding
+            h = torch.where(
+                src_mask[:, j : j + 1], h_new, h
+            )  # keep old state on padding
             fwd.append(h)
         h = emb.new_zeros(B, self.n)
         bwd = [None] * T_x
         for j in reversed(range(T_x)):
             h_new = self.backward_rnn(emb[:, j], h)
-            h = torch.where(src_mask[:, j : j + 1], h_new, h) 
+            h = torch.where(src_mask[:, j : j + 1], h_new, h)
             bwd[j] = h
         fwd = torch.stack(fwd, dim=1)
-        bwd = torch.stack(bwd, dim=1) 
-        annotations = torch.cat([fwd, bwd], dim=-1)  
+        bwd = torch.stack(bwd, dim=1)
+        annotations = torch.cat([fwd, bwd], dim=-1)
         return annotations, bwd[:, 0]
+
 
 class AlignmentModel(nn.Module):
     def __init__(self, cfg):
@@ -221,14 +231,15 @@ class AlignmentModel(nn.Module):
         self.v_a = nn.Linear(cfg.n_prime, 1, bias=False)
 
     def precompute(self, annotations):
-        return self.U_a(annotations)  
+        return self.U_a(annotations)
 
     def forward(self, s_prev, annotations, U_h, src_mask):
         e = self.v_a(torch.tanh(self.W_a(s_prev).unsqueeze(1) + U_h)).squeeze(-1)
-        e = e.masked_fill(~src_mask, float("-inf"))  
+        e = e.masked_fill(~src_mask, float("-inf"))
         alpha = torch.softmax(e, dim=-1)
         c = torch.bmm(alpha.unsqueeze(1), annotations).squeeze(1)
         return c, alpha
+
 
 class Decoder(nn.Module):
     def __init__(self, K_y, cfg):
@@ -260,6 +271,7 @@ class Decoder(nn.Module):
         s = self.rnn(e_y, s_prev, c)
         return logits, s, alpha
 
+
 class RNNsearch(nn.Module):
     def __init__(self, K_x, K_y, cfg):
         super().__init__()
@@ -283,7 +295,9 @@ class RNNsearch(nn.Module):
                 self.decoder.rnn,
             ]:
                 nn.init.orthogonal_(cell.U.weight)
-                blocks = [nn.init.orthogonal_(torch.empty(cfg.n, cfg.n)) for _ in range(2)]
+                blocks = [
+                    nn.init.orthogonal_(torch.empty(cfg.n, cfg.n)) for _ in range(2)
+                ]
                 cell.U_zr.weight.copy_(torch.cat(blocks, dim=0))
 
             align = self.decoder.alignment
@@ -311,9 +325,11 @@ class RNNsearch(nn.Module):
             alphas.append(alpha)
         return torch.stack(logits, dim=1), torch.stack(alphas, dim=1)
 
+
 ###############################
 # Training
 ###############################
+
 
 def compute_loss(model, src, tgt):
     src_mask = src != PAD
@@ -329,6 +345,7 @@ def compute_loss(model, src, tgt):
     )
     num_tokens = (tgt_out != PAD).sum().item()
     return loss_sum / src.size(0), loss_sum.item(), num_tokens
+
 
 def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
     optimizer = torch.optim.Adadelta(
@@ -357,6 +374,7 @@ def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
                 f"ppl {math.exp(per_token):8.3f}"
             )
     return model
+
 
 def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
     # Zeiler's Adadelta has no learning rate; PyTorch's version multiplies the
@@ -388,15 +406,19 @@ def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
             )
     return model
 
+
 #####################################
 # Decoding
 #####################################
+
 
 @torch.no_grad()
 def greedy_decode(model, src, cfg):
     model.eval()
     src_mask = src != PAD
-    annotations, U_h, s = model.encode(src, src_mask)  # computed once, reused every step
+    annotations, U_h, s = model.encode(
+        src, src_mask
+    )  # computed once, reused every step
     y = torch.tensor([SOS])
     tokens, alphas = [], []
 
@@ -417,7 +439,7 @@ def beam_search(model, src, cfg):
     src_mask = src != PAD
     annotations, U_h, s0 = model.encode(src, src_mask)
 
-    beams = [([], 0.0, s0, [])] 
+    beams = [([], 0.0, s0, [])]
     finished = []
 
     for _ in range(cfg.max_decode_len):
@@ -459,6 +481,7 @@ def beam_search(model, src, cfg):
 # Evaluation
 #####################################
 
+
 def exact_match(model, pairs, cfg, src_vocab, tgt_vocab, decoder_fn):
     correct = 0
     for pair in pairs:
@@ -476,6 +499,7 @@ def print_alignment(src_words, tgt_words, alphas):
     for word, row in zip(tgt_words, alphas):
         cells = "".join(f"{a:.2f}".rjust(width) for a in row.tolist())
         print(word.ljust(label) + cells)
+
 
 #####################################
 # Checks
@@ -544,7 +568,80 @@ def check_overfit(cfg, src_vocab, tgt_vocab, train_pairs):
     small_cfg = Config(**{**cfg.__dict__, "batch_size": 20})
     model = RNNsearch(len(src_vocab), len(tgt_vocab), small_cfg)
     subset = train_pairs[:20]
-    train(model, subset, small_cfg, src_vocab, tgt_vocab, cfg.overfit_epochs, log_every=250)
+    train(
+        model,
+        subset,
+        small_cfg,
+        src_vocab,
+        tgt_vocab,
+        cfg.overfit_epochs,
+        log_every=250,
+    )
     acc = exact_match(model, subset, small_cfg, src_vocab, tgt_vocab, greedy_decode)
     print(f"  memorised {acc:.0%} of 20 training pairs")
     return acc
+
+
+#####################################
+# Main
+#####################################
+
+
+def main():
+    cfg = Config()
+    torch.manual_seed(cfg.seed)
+    random.seed(cfg.seed)
+
+    train_pairs, valid_pairs, src_vocab, tgt_vocab = build_dataset(cfg)
+    K_x, K_y = len(src_vocab), len(tgt_vocab)
+
+    print("Data")
+    s, t = train_pairs[0]
+    si, ti = tensorize(train_pairs[0], src_vocab, tgt_vocab)
+    print(f"  source          {' '.join(s)}")
+    print(f"  target          {' '.join(t)}")
+    print(f"  source ids      {si}   <eos> last, not reversed")
+    print(f"  target ids      {ti}   <sos> first, <eos> last")
+    print(f"  vocab           K_x={K_x} / K_y={K_y}")
+    print(f"  pairs           {len(train_pairs)} train / {len(valid_pairs)} held out")
+
+    print("\nShapes")
+    model = RNNsearch(K_x, K_y, cfg)
+    check_shapes(model, cfg, K_x, K_y)
+
+    print("\nUniform attention at init")
+    check_uniform_at_init(model, src_vocab, tgt_vocab, train_pairs[0])
+
+    print("\nOverfit check")
+    check_overfit(cfg, src_vocab, tgt_vocab, train_pairs)
+
+    print("\nTraining")
+    model = RNNsearch(K_x, K_y, cfg)
+    train(model, train_pairs, cfg, src_vocab, tgt_vocab, cfg.epochs)
+
+    print("\nHeld-out exact match")
+    greedy = exact_match(model, valid_pairs, cfg, src_vocab, tgt_vocab, greedy_decode)
+    beam = exact_match(model, valid_pairs, cfg, src_vocab, tgt_vocab, beam_search)
+    print(f"  greedy          {greedy:.1%}")
+    print(f"  beam (B={cfg.beam_width})      {beam:.1%}")
+
+    print("\nSamples")
+    for pair in valid_pairs[:3]:
+        src_ids, _ = tensorize(pair, src_vocab, tgt_vocab)
+        tokens, _ = beam_search(model, torch.tensor([src_ids]), cfg)
+        print(f"  source          {' '.join(pair[0])}")
+        print(f"  reference       {' '.join(pair[1])}")
+        print(f"  predicted       {' '.join(tgt_vocab.decode(tokens))}")
+        print()
+
+    print("Alignment (rows: target, columns: source)")
+    pair = valid_pairs[0]
+    src_ids, _ = tensorize(pair, src_vocab, tgt_vocab)
+    tokens, alphas = beam_search(model, torch.tensor([src_ids]), cfg)
+    src_words = pair[0] + ["<eos>"]
+    tgt_words = tgt_vocab.decode(tokens) + ["<eos>"]
+    print_alignment(src_words, tgt_words[: len(alphas)], alphas)
+
+
+if __name__ == "__main__":
+    main()
