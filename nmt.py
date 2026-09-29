@@ -454,3 +454,25 @@ def beam_search(model, src, cfg):
     best = max(finished, key=lambda x: x[1])
     return best[0], best[2]
 
+
+#####################################
+# Evaluation
+#####################################
+
+def exact_match(model, pairs, cfg, src_vocab, tgt_vocab, decoder_fn):
+    correct = 0
+    for pair in pairs:
+        src_ids, _ = tensorize(pair, src_vocab, tgt_vocab)
+        tokens, _ = decoder_fn(model, torch.tensor([src_ids]), cfg)
+        if tgt_vocab.decode(tokens) == pair[1]:
+            correct += 1
+    return correct / len(pairs)
+
+
+def print_alignment(src_words, tgt_words, alphas):
+    width = max(len(w) for w in src_words + ["0.00"]) + 1
+    label = max(len(w) for w in tgt_words) + 2
+    print(" " * label + "".join(w.rjust(width) for w in src_words))
+    for word, row in zip(tgt_words, alphas):
+        cells = "".join(f"{a:.2f}".rjust(width) for a in row.tolist())
+        print(word.ljust(label) + cells)

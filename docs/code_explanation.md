@@ -278,3 +278,32 @@ Each hypothesis is a tuple `(tokens, score, state, alphas)`: the words so far, t
 - `return best[0], best[2]` returns its words and its attention rows.
 
 Note: scores are raw sums of log probabilities with no length normalisation. Every extra word lowers the score, so this search slightly favours shorter translations. The paper does not state its beam width or whether it normalises by length.
+
+## Evaluation
+
+### Exact match (`exact_match`)
+
+Measures accuracy: the fraction of sentences translated perfectly, word for word.
+
+- `correct = 0` counts perfect translations.
+- `for pair in pairs:` visits each held-out (source words, target words) pair.
+- `src_ids, _ = tensorize(pair, src_vocab, tgt_vocab)` converts the source to ids with `<eos>` appended. The target ids are not needed, so they are discarded.
+- `tokens, _ = decoder_fn(model, torch.tensor([src_ids]), cfg)` translates the sentence. `torch.tensor([src_ids])` adds a batch axis, giving shape `(1, T_x)`. `decoder_fn` is whichever decoder is passed in, `greedy_decode` or `beam_search`, so the same function scores both. The attention rows are not needed here.
+- `if tgt_vocab.decode(tokens) == pair[1]:` turns the output ids back into words and compares the whole list with the reference. One wrong or missing word makes the sentence count as wrong.
+- `correct += 1` counts a perfect translation.
+- `return correct / len(pairs)` returns the accuracy as a fraction between 0 and 1.
+
+This works for the toy dataset because every source sentence has exactly one correct translation. Real translation has many acceptable outputs, which is why the paper reports BLEU, a score based on overlapping word sequences, instead of exact match.
+
+### Alignment table (`print_alignment`)
+
+Prints the attention weights as a text table, a text version of the paper's Figure 3 heatmap. Columns are source words, rows are target words, and each cell is $\alpha_{ij}$: how much attention target word $i$ paid to source word $j$.
+
+- `width = max(len(w) for w in src_words + ["0.00"]) + 1` sets the column width to fit the longest source word or a number like `0.00`, whichever is wider, plus one space.
+- `label = max(len(w) for w in tgt_words) + 2` sets the width of the left-hand column that holds the target words.
+- `print(" " * label + "".join(w.rjust(width) for w in src_words))` prints the header: blank space above the label column, then each source word right-aligned in its column.
+- `for word, row in zip(tgt_words, alphas):` visits each target word with its attention row.
+- `cells = "".join(f"{a:.2f}".rjust(width) for a in row.tolist())` formats every weight to two decimals and right-aligns it under its source word.
+- `print(word.ljust(label) + cells)` prints the target word left-aligned, followed by its row of weights.
+
+Each row sums to 1, since it is a softmax over source positions. On the toy data, a well-trained model puts most of each French noun's weight on the English noun and each adjective's weight on the English adjective. The weights cross, because French places the adjective after the noun, which is the same kind of reordering the paper shows in Figure 3(a).
