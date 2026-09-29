@@ -476,3 +476,75 @@ def print_alignment(src_words, tgt_words, alphas):
     for word, row in zip(tgt_words, alphas):
         cells = "".join(f"{a:.2f}".rjust(width) for a in row.tolist())
         print(word.ljust(label) + cells)
+
+#####################################
+# Checks
+#####################################
+
+
+def check_shapes(model, cfg, K_x, K_y):
+    lengths = [7, 5, 7, 3]
+    B, T_x, T_y = len(lengths), max(lengths), 6
+    src = torch.full((B, T_x), PAD, dtype=torch.long)
+    for i, L in enumerate(lengths):
+        src[i, :L] = torch.randint(4, K_x, (L,))
+    src_mask = src != PAD
+    tgt_in = torch.randint(4, K_y, (B, T_y))
+    n, m, l, n_prime = cfg.n, cfg.m, cfg.l, cfg.n_prime
+
+    annotations, U_h, s0 = model.encode(src, src_mask)
+    assert annotations.shape == (B, T_x, 2 * n), annotations.shape
+    assert U_h.shape == (B, T_x, n_prime), U_h.shape
+    assert s0.shape == (B, n), s0.shape
+
+    dec = model.decoder
+    c, alpha = dec.alignment(s0, annotations, U_h, src_mask)
+    assert c.shape == (B, 2 * n), c.shape
+    assert alpha.shape == (B, T_x), alpha.shape
+    assert torch.allclose(alpha.sum(-1), torch.ones(B)), "alpha rows must sum to 1"
+    assert (alpha[~src_mask] == 0).all(), "padded positions must get zero weight"
+
+    e_y = dec.embedding(tgt_in[:, 0])
+    assert e_y.shape == (B, m), e_y.shape
+    t_tilde, t, logits = dec.readout(s0, e_y, c)
+    assert t_tilde.shape == (B, 2 * l), t_tilde.shape
+    assert t.shape == (B, l), t.shape
+    assert logits.shape == (B, K_y), logits.shape
+
+    all_logits, all_alphas = model(src, src_mask, tgt_in)
+    assert all_logits.shape == (B, T_y, K_y), all_logits.shape
+    assert all_alphas.shape == (B, T_y, T_x), all_alphas.shape
+
+    print(f"  annotations h     (B, T_x, 2n)  = {tuple(annotations.shape)}")
+    print(f"  U_a h (cached)    (B, T_x, n')  = {tuple(U_h.shape)}")
+    print(f"  s_0               (B, n)        = {tuple(s0.shape)}")
+    print(f"  context c_i       (B, 2n)       = {tuple(c.shape)}")
+    print(f"  alpha_i           (B, T_x)      = {tuple(alpha.shape)}")
+    print(f"  t~_i              (B, 2l)       = {tuple(t_tilde.shape)}")
+    print(f"  t_i after maxout  (B, l)        = {tuple(t.shape)}")
+    print(f"  logits            (B, K_y)      = {tuple(logits.shape)}")
+    print(f"  alignment matrix  (B, T_y, T_x) = {tuple(all_alphas.shape)}")
+    print(f"  parameters        {sum(p.numel() for p in model.parameters()):,}")
+
+
+def check_uniform_at_init(model, src_vocab, tgt_vocab, pair):
+    src_ids, _ = tensorize(pair, src_vocab, tgt_vocab)
+    src = torch.tensor([src_ids])
+    src_mask = src != PAD
+    annotations, U_h, s0 = model.encode(src, src_mask)
+    _, alpha = model.decoder.alignment(s0, annotations, U_h, src_mask)
+
+    T_x = len(src_ids)
+    assert torch.allclose(alpha, torch.full_like(alpha, 1.0 / T_x)), alpha
+    entropy = -(alpha * alpha.log()).sum().item()
+    print(f"  attention entropy {entropy:.4f}  log(T_x) {math.log(T_x):.4f}  (uniform)")
+
+
+def check_overfit(cfg, src_vocab, tgt_vocab, train_pairs):
+    small_cfg = Config(**{**cfg.__dict__, "batch_size": 20})
+    model = RNNsearch(len(src_vocab), len(tgt_vocab), small_cfg)
+    subset = train_pairs[:20]
+    train(model, subset, small_cfg, src_vocab, tgt_vocab, cfg.overfit_epochs, log_every=250)
+    acc = exact_match(model, subset, small_cfg, src_vocab, tgt_vocab, greedy_decode)
+    print(f"  memorised {acc:.0%} of 20 training pairs")
+    return acc
