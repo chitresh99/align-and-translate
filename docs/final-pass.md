@@ -54,7 +54,7 @@ Soft selection contains hard selection as a limiting case. When the model wants 
 ### Encoder
 
 $$
-h_t = f(x_t, h_{t-1}) \tag{1}
+h_t = f(x_t, h_{t-1}) \qquad (1)
 $$
 
 $$
@@ -78,11 +78,11 @@ Note: $c$ here is the context vector. In LSTM notation $c_t$ is the cell state. 
 ### Decoder
 
 $$
-p(\mathbf{y}) = \prod_{t=1}^{T} p(y_t \mid \lbrace y_1, \ldots, y_{t-1} \rbrace, c) \tag{2}
+p(\mathbf{y}) = \prod_{t=1}^{T} p(y_t \mid \lbrace y_1, \ldots, y_{t-1} \rbrace, c) \qquad (2)
 $$
 
 $$
-p(y_t \mid \lbrace y_1, \ldots, y_{t-1} \rbrace, c) = g(y_{t-1}, s_t, c) \tag{3}
+p(y_t \mid \lbrace y_1, \ldots, y_{t-1} \rbrace, c) = g(y_{t-1}, s_t, c) \qquad (3)
 $$
 
 **Equation 2 in plain words:** the probability of a whole translation is the probability of the first word, times the probability of the second given the first, times the probability of the third given the first two, and so on.
@@ -116,7 +116,7 @@ which avoids underflow and is exactly the per-position cross-entropy loss. Beam 
 **Intuition:** to pick the next word, look at the word just written, where you are in the sentence, and a fresh summary of the source built for this word specifically. The state advances by combining where it was, what it just wrote, and that same fresh summary.
 
 $$
-p(y_i \mid y_1, \ldots, y_{i-1}, \mathbf{x}) = g(y_{i-1}, s_i, c_i) \tag{4}
+p(y_i \mid y_1, \ldots, y_{i-1}, \mathbf{x}) = g(y_{i-1}, s_i, c_i) \qquad (4)
 $$
 
 $$
@@ -149,15 +149,15 @@ The left side now conditions on $\mathbf{x}$ rather than $c$, because the decode
 - **Eq. 5:** blend all the source vectors together in those proportions.
 
 $$
-c_i = \sum_{j=1}^{T_x} \alpha_{ij} h_j \tag{5}
+c_i = \sum_{j=1}^{T_x} \alpha_{ij} h_j \qquad (5)
 $$
 
 $$
-\alpha_{ij} = \frac{\exp(e_{ij})}{\sum_{k=1}^{T_x} \exp(e_{ik})} \tag{6}
+\alpha_{ij} = \frac{\exp(e_{ij})}{\sum_{k=1}^{T_x} \exp(e_{ik})} \qquad (6)
 $$
 
 $$
-e_{ij} = a(s_{i-1}, h_j) \tag{7}
+e_{ij} = a(s_{i-1}, h_j) \qquad (7)
 $$
 
 | symbol | meaning | shape |
