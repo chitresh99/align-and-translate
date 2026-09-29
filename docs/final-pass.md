@@ -104,7 +104,7 @@ Each factor is the probability of that step's word, not of the earlier words; th
 **At training time nothing is multiplied.** Taking logs turns the product into a sum,
 
 $$
-\log p(\mathbf{y}) = \sum_t \log p(y_t \mid y_{<t}, c)
+\log p(\mathbf{y}) = \sum_t \log p(y_t \mid y_{\lt t}, c)
 $$
 
 which avoids underflow and is exactly the per-position cross-entropy loss. Beam search scores in the same log space.
@@ -383,7 +383,7 @@ A smooth approximation to argmax, not to max; the name is a misnomer. As $\tau \
 Taking the best word at every step does not give the best sentence. The target is
 
 $$
-y^{\ast} = \arg\max_y \prod_i p(y_i \mid y_{<i}, x)
+y^{\ast} = \arg\max_y \prod_i p(y_i \mid y_{\lt i}, x)
 $$
 
 over $V^T$ candidates, which is intractable. Greedy maximises each factor on its own, but each choice changes what comes next, so a locally worse word can lead to a better sentence.
