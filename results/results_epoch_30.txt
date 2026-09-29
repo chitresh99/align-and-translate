@@ -1,0 +1,72 @@
+Data
+  source          cold cat new field cold bird bright stone old tree
+  target          le chat froid le champ neuf oiseau froid la pierre clair arbre vieux
+  source ids      [8, 7, 12, 9, 8, 5, 6, 18, 13, 19, 2]   <eos> last, not reversed
+  target ids      [1, 11, 6, 8, 11, 5, 13, 14, 8, 10, 16, 7, 4, 21, 2]   <sos> first, <eos> last
+  vocab           K_x=20 / K_y=22
+  pairs           6000 train / 300 held out
+
+Shapes
+  annotations h     (B, T_x, 2n)  = (4, 7, 256)
+  U_a h (cached)    (B, T_x, n')  = (4, 7, 128)
+  s_0               (B, n)        = (4, 128)
+  context c_i       (B, 2n)       = (4, 256)
+  alpha_i           (B, T_x)      = (4, 7)
+  t~_i              (B, 2l)       = (4, 128)
+  t_i after maxout  (B, l)        = (4, 64)
+  logits            (B, K_y)      = (4, 22)
+  alignment matrix  (B, T_y, T_x) = (4, 6, 7)
+  parameters        469,302
+
+Uniform attention at init
+  attention entropy 2.3979  log(T_x) 2.3979  (uniform)
+
+Overfit check
+  epoch    1  loss/token 3.0910  ppl   22.000
+  epoch  250  loss/token 1.2594  ppl    3.523
+  epoch  500  loss/token 0.1124  ppl    1.119
+  epoch  750  loss/token 0.0003  ppl    1.000
+  epoch 1000  loss/token 0.0001  ppl    1.000
+  memorised 100% of 20 training pairs
+
+Training
+  epoch    1  loss/token 2.3191  ppl   10.167
+  epoch    5  loss/token 1.6056  ppl    4.981
+  epoch   10  loss/token 1.5510  ppl    4.716
+  epoch   15  loss/token 1.3978  ppl    4.046
+  epoch   20  loss/token 1.1476  ppl    3.151
+  epoch   25  loss/token 0.9556  ppl    2.600
+  epoch   30  loss/token 0.8296  ppl    2.292
+
+Held-out exact match
+  greedy          0.0%
+  beam (B=5)      0.0%
+
+Samples
+  source          red house red cat new stone small house
+  reference       la maison rouge le chat rouge la pierre neuf la maison petit
+  predicted       la pierre rouge le chat rouge la pierre rouge la maison froid
+
+  source          red bird red river red stone new tree big house
+  reference       oiseau rouge la riviere rouge la pierre rouge arbre neuf la maison grand
+  predicted       oiseau vieux la maison rouge la pierre neuf arbre petit la maison grand
+
+  source          red road small cat green field cold bird
+  reference       route rouge le chat petit le champ vert oiseau froid
+  predicted       route clair le chat rouge le chat rouge oiseau rouge
+
+Alignment (rows: target, columns: source)
+           red house   red   cat   new stone small house <eos>
+la        0.10  0.12  0.11  0.11  0.11  0.12  0.11  0.11  0.11
+pierre    0.10  0.11  0.11  0.11  0.11  0.11  0.11  0.11  0.11
+rouge     0.11  0.11  0.11  0.11  0.11  0.12  0.11  0.11  0.11
+le        0.11  0.11  0.11  0.11  0.11  0.12  0.11  0.11  0.11
+chat      0.08  0.11  0.11  0.11  0.11  0.13  0.12  0.12  0.11
+rouge     0.06  0.12  0.10  0.11  0.12  0.14  0.12  0.12  0.11
+la        0.03  0.09  0.05  0.06  0.11  0.23  0.16  0.16  0.10
+pierre    0.03  0.04  0.03  0.03  0.04  0.40  0.18  0.21  0.05
+rouge     0.02  0.04  0.02  0.02  0.04  0.33  0.24  0.25  0.04
+la        0.04  0.05  0.02  0.03  0.05  0.28  0.22  0.29  0.03
+maison    0.08  0.09  0.06  0.07  0.08  0.18  0.14  0.23  0.07
+froid     0.05  0.07  0.04  0.05  0.06  0.22  0.21  0.25  0.05
+<eos>     0.04  0.07  0.04  0.05  0.07  0.22  0.21  0.24  0.06

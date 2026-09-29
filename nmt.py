@@ -26,7 +26,7 @@ class Config:
     rho: float = 0.95  # adadelta decay
     eps: float = 1e-6  # adadelta epsilon
     clip_threshold: float = 1.0  # gradient L2 norm cap
-    epochs: int = 30
+    epochs: int = 55
 
     # initialisation (appendix B.1)
     init_std: float = 0.01  # variance 0.01^2
@@ -347,7 +347,7 @@ def compute_loss(model, src, tgt):
     return loss_sum / src.size(0), loss_sum.item(), num_tokens
 
 
-def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
+def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=9):
     optimizer = torch.optim.Adadelta(
         model.parameters(), lr=1.0, rho=cfg.rho, eps=cfg.eps
     )
@@ -367,7 +367,7 @@ def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
             total_loss += loss_sum
             total_tokens += n_tokens
 
-        if epoch % log_every == 0 or epoch == 1:
+        if epoch % log_every == 0 or epoch == 1 or epoch == epochs:
             per_token = total_loss / total_tokens
             print(
                 f"  epoch {epoch:4d}  loss/token {per_token:6.4f}  "
@@ -617,7 +617,7 @@ def main():
 
     print("\nTraining")
     model = RNNsearch(K_x, K_y, cfg)
-    train(model, train_pairs, cfg, src_vocab, tgt_vocab, cfg.epochs)
+    train(model, train_pairs, cfg, src_vocab, tgt_vocab, cfg.epochs, log_every=10)
 
     print("\nHeld-out exact match")
     greedy = exact_match(model, valid_pairs, cfg, src_vocab, tgt_vocab, greedy_decode)
