@@ -213,3 +213,101 @@ class Encoder(nn.Module):
         annotations = torch.cat([fwd, bwd], dim=-1)  
         return annotations, bwd[:, 0]
 
+class AlignmentModel(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.W_a = nn.Linear(cfg.n, cfg.n_prime, bias=False)
+        self.U_a = nn.Linear(2 * cfg.n, cfg.n_prime)
+        self.v_a = nn.Linear(cfg.n_prime, 1, bias=False)
+
+    def precompute(self, annotations):
+        return self.U_a(annotations)  
+
+    def forward(self, s_prev, annotations, U_h, src_mask):
+        e = self.v_a(torch.tanh(self.W_a(s_prev).unsqueeze(1) + U_h)).squeeze(-1)
+        e = e.masked_fill(~src_mask, float("-inf"))  
+        alpha = torch.softmax(e, dim=-1)
+        c = torch.bmm(alpha.unsqueeze(1), annotations).squeeze(1)
+        return c, alpha
+
+class Decoder(nn.Module):
+    def __init__(self, K_y, cfg):
+        super().__init__()
+        self.l = cfg.l
+        self.embedding = nn.Embedding(K_y, cfg.m, padding_idx=PAD)
+        self.W_s = nn.Linear(cfg.n, cfg.n)
+        self.alignment = AlignmentModel(cfg)
+        self.rnn = GatedUnit(cfg.m, cfg.n, context_dim=2 * cfg.n)
+
+        self.U_o = nn.Linear(cfg.n, 2 * cfg.l)
+        self.V_o = nn.Linear(cfg.m, 2 * cfg.l, bias=False)
+        self.C_o = nn.Linear(2 * cfg.n, 2 * cfg.l, bias=False)
+        self.W_o = nn.Linear(cfg.l, K_y)
+
+    def initial_state(self, bwd_first):
+        return torch.tanh(self.W_s(bwd_first))
+
+    def readout(self, s_prev, e_y, c):
+        t_tilde = self.U_o(s_prev) + self.V_o(e_y) + self.C_o(c)  # (B, 2l)
+        t = t_tilde.view(-1, self.l, 2).max(dim=-1).values  # (B, l)
+        logits = self.W_o(t)
+        return t_tilde, t, logits
+
+    def step(self, y_prev, s_prev, annotations, U_h, src_mask):
+        c, alpha = self.alignment(s_prev, annotations, U_h, src_mask)
+        e_y = self.embedding(y_prev)  # (B, m)
+        _, _, logits = self.readout(s_prev, e_y, c)
+        s = self.rnn(e_y, s_prev, c)
+        return logits, s, alpha
+
+class RNNsearch(nn.Module):
+    def __init__(self, K_x, K_y, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.encoder = Encoder(K_x, cfg)
+        self.decoder = Decoder(K_y, cfg)
+        self.init_weights()
+
+    def init_weights(self):
+        cfg = self.cfg
+        for p in self.parameters():
+            if p.dim() == 1:
+                nn.init.zeros_(p)
+            else:
+                nn.init.normal_(p, 0.0, cfg.init_std)
+
+        with torch.no_grad():
+            for cell in [
+                self.encoder.forward_rnn,
+                self.encoder.backward_rnn,
+                self.decoder.rnn,
+            ]:
+                nn.init.orthogonal_(cell.U.weight)
+                blocks = [nn.init.orthogonal_(torch.empty(cfg.n, cfg.n)) for _ in range(2)]
+                cell.U_zr.weight.copy_(torch.cat(blocks, dim=0))
+
+            align = self.decoder.alignment
+            nn.init.normal_(align.W_a.weight, 0.0, cfg.align_init_std)
+            nn.init.normal_(align.U_a.weight, 0.0, cfg.align_init_std)
+            nn.init.zeros_(align.v_a.weight)
+
+            self.encoder.embedding.weight[PAD].zero_()
+            self.decoder.embedding.weight[PAD].zero_()
+
+    def encode(self, src, src_mask):
+        annotations, bwd_first = self.encoder(src, src_mask)
+        U_h = self.decoder.alignment.precompute(annotations)
+        s0 = self.decoder.initial_state(bwd_first)
+        return annotations, U_h, s0
+
+    def forward(self, src, src_mask, tgt_in):
+        annotations, U_h, s = self.encode(src, src_mask)
+        logits, alphas = [], []
+        for i in range(tgt_in.size(1)):
+            step_logits, s, alpha = self.decoder.step(
+                tgt_in[:, i], s, annotations, U_h, src_mask
+            )
+            logits.append(step_logits)
+            alphas.append(alpha)
+        return torch.stack(logits, dim=1), torch.stack(alphas, dim=1)
+
