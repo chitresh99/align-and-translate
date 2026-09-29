@@ -311,3 +311,80 @@ class RNNsearch(nn.Module):
             alphas.append(alpha)
         return torch.stack(logits, dim=1), torch.stack(alphas, dim=1)
 
+###############################
+# Training
+###############################
+
+def compute_loss(model, src, tgt):
+    src_mask = src != PAD
+    tgt_in = tgt[:, :-1]  # <sos> y1 ... yT
+    tgt_out = tgt[:, 1:]  # y1 ... yT <eos>
+
+    logits, _ = model(src, src_mask, tgt_in)
+    loss_sum = nn.functional.cross_entropy(
+        logits.reshape(-1, logits.size(-1)),
+        tgt_out.reshape(-1),
+        ignore_index=PAD,
+        reduction="sum",
+    )
+    num_tokens = (tgt_out != PAD).sum().item()
+    return loss_sum / src.size(0), loss_sum.item(), num_tokens
+
+def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
+    optimizer = torch.optim.Adadelta(
+        model.parameters(), lr=1.0, rho=cfg.rho, eps=cfg.eps
+    )
+
+    data = [tensorize(p, src_vocab, tgt_vocab) for p in pairs]
+    random.Random(cfg.seed).shuffle(data)
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        total_loss, total_tokens = 0.0, 0
+        for src, tgt in iterate_batches(data, cfg):
+            optimizer.zero_grad()
+            loss, loss_sum, n_tokens = compute_loss(model, src, tgt)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip_threshold)
+            optimizer.step()
+            total_loss += loss_sum
+            total_tokens += n_tokens
+
+        if epoch % log_every == 0 or epoch == 1:
+            per_token = total_loss / total_tokens
+            print(
+                f"  epoch {epoch:4d}  loss/token {per_token:6.4f}  "
+                f"ppl {math.exp(per_token):8.3f}"
+            )
+    return model
+
+def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
+    # Zeiler's Adadelta has no learning rate; PyTorch's version multiplies the
+    # update by lr, so lr=1.0 recovers the original.
+    optimizer = torch.optim.Adadelta(
+        model.parameters(), lr=1.0, rho=cfg.rho, eps=cfg.eps
+    )
+
+    data = [tensorize(p, src_vocab, tgt_vocab) for p in pairs]
+    random.Random(cfg.seed).shuffle(data)  # shuffled once before training
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        total_loss, total_tokens = 0.0, 0
+        for src, tgt in iterate_batches(data, cfg):
+            optimizer.zero_grad()
+            loss, loss_sum, n_tokens = compute_loss(model, src, tgt)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip_threshold)
+            optimizer.step()
+            total_loss += loss_sum
+            total_tokens += n_tokens
+
+        if epoch % log_every == 0 or epoch == 1:
+            per_token = total_loss / total_tokens
+            print(
+                f"  epoch {epoch:4d}  loss/token {per_token:6.4f}  "
+                f"ppl {math.exp(per_token):8.3f}"
+            )
+    return model
+
