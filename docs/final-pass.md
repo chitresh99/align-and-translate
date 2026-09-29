@@ -53,9 +53,13 @@ Soft selection contains hard selection as a limiting case. When the model wants 
 
 ### Encoder
 
-$$h_t = f(x_t, h_{t-1}) \tag{1}$$
+$$
+h_t = f(x_t, h_{t-1}) \tag{1}
+$$
 
-$$c = q(\{h_1, \ldots, h_{T_x}\})$$
+$$
+c = q(\lbrace h_1, \ldots, h_{T_x} \rbrace)
+$$
 
 | symbol | meaning |
 | --- | --- |
@@ -65,7 +69,7 @@ $$c = q(\{h_1, \ldots, h_{T_x}\})$$
 | $c$ | the summary vector the decoder starts from |
 | $q$ | a function collapsing all hidden states into $c$ |
 
-Sutskever et al. use $q(\{h_1, \ldots, h_T\}) = h_T$, so in practice $c$ is the last hidden state.
+Sutskever et al. use $q(\lbrace h_1, \ldots, h_T \rbrace) = h_T$, so in practice $c$ is the last hidden state.
 
 Writing $q$ as a general function of the whole set is a deliberate setup. Footnote 2 says it outright: encoding into a fixed-length vector is not necessary, and a variable-length representation may be better. Applying $q$ is exactly where the variable-length source becomes fixed-length: the bottleneck, located precisely.
 
@@ -73,9 +77,13 @@ Note: $c$ here is the context vector. In LSTM notation $c_t$ is the cell state. 
 
 ### Decoder
 
-$$p(\mathbf{y}) = \prod_{t=1}^{T} p(y_t \mid \{y_1, \ldots, y_{t-1}\}, c) \tag{2}$$
+$$
+p(\mathbf{y}) = \prod_{t=1}^{T} p(y_t \mid \lbrace y_1, \ldots, y_{t-1} \rbrace, c) \tag{2}
+$$
 
-$$p(y_t \mid \{y_1, \ldots, y_{t-1}\}, c) = g(y_{t-1}, s_t, c) \tag{3}$$
+$$
+p(y_t \mid \lbrace y_1, \ldots, y_{t-1} \rbrace, c) = g(y_{t-1}, s_t, c) \tag{3}
+$$
 
 **Equation 2 in plain words:** the probability of a whole translation is the probability of the first word, times the probability of the second given the first, times the probability of the third given the first two, and so on.
 
@@ -83,7 +91,9 @@ $$p(y_t \mid \{y_1, \ldots, y_{t-1}\}, c) = g(y_{t-1}, s_t, c) \tag{3}$$
 
 Worked out for "le chat noir":
 
-$$p(\text{le chat noir}) = p(\text{le} \mid c) \cdot p(\text{chat} \mid \text{le}, c) \cdot p(\text{noir} \mid \text{le}, \text{chat}, c)$$
+$$
+p(\text{le chat noir}) = p(\text{le} \mid c) \cdot p(\text{chat} \mid \text{le}, c) \cdot p(\text{noir} \mid \text{le}, \text{chat}, c)
+$$
 
 Each factor is the probability of that step's word, not of the earlier words; those are only in the conditioning.
 
@@ -93,7 +103,9 @@ Each factor is the probability of that step's word, not of the earlier words; th
 
 **At training time nothing is multiplied.** Taking logs turns the product into a sum,
 
-$$\log p(\mathbf{y}) = \sum_t \log p(y_t \mid y_{<t}, c)$$
+$$
+\log p(\mathbf{y}) = \sum_t \log p(y_t \mid y_{<t}, c)
+$$
 
 which avoids underflow and is exactly the per-position cross-entropy loss. Beam search scores in the same log space.
 
@@ -103,9 +115,13 @@ which avoids underflow and is exactly the per-position cross-entropy loss. Beam 
 
 **Intuition:** to pick the next word, look at the word just written, where you are in the sentence, and a fresh summary of the source built for this word specifically. The state advances by combining where it was, what it just wrote, and that same fresh summary.
 
-$$p(y_i \mid y_1, \ldots, y_{i-1}, \mathbf{x}) = g(y_{i-1}, s_i, c_i) \tag{4}$$
+$$
+p(y_i \mid y_1, \ldots, y_{i-1}, \mathbf{x}) = g(y_{i-1}, s_i, c_i) \tag{4}
+$$
 
-$$s_i = f(s_{i-1}, y_{i-1}, c_i)$$
+$$
+s_i = f(s_{i-1}, y_{i-1}, c_i)
+$$
 
 | symbol | meaning | shape |
 | --- | --- | --- |
@@ -132,11 +148,17 @@ The left side now conditions on $\mathbf{x}$ rather than $c$, because the decode
 - **Eq. 6:** turn those scores into weights that sum to 1.
 - **Eq. 5:** blend all the source vectors together in those proportions.
 
-$$c_i = \sum_{j=1}^{T_x} \alpha_{ij} h_j \tag{5}$$
+$$
+c_i = \sum_{j=1}^{T_x} \alpha_{ij} h_j \tag{5}
+$$
 
-$$\alpha_{ij} = \frac{\exp(e_{ij})}{\sum_{k=1}^{T_x} \exp(e_{ik})} \tag{6}$$
+$$
+\alpha_{ij} = \frac{\exp(e_{ij})}{\sum_{k=1}^{T_x} \exp(e_{ik})} \tag{6}
+$$
 
-$$e_{ij} = a(s_{i-1}, h_j) \tag{7}$$
+$$
+e_{ij} = a(s_{i-1}, h_j) \tag{7}
+$$
 
 | symbol | meaning | shape |
 | --- | --- | --- |
@@ -155,13 +177,17 @@ Every $\alpha_{ij}$ is one cell of a $T_y \times T_x$ matrix, which is the heatm
 
 **Eq. 7.** The alignment model runs $T_x$ times per output step. It takes $s_{i-1}$ rather than $s_i$ because $s_i$ depends on $c_i$, which depends on these scores; using $s_i$ would be circular. $a$ is the only learned component in these three equations. Its parametrisation is in Appendix A.1.2 and A.2.2:
 
-$$a(s_{i-1}, h_j) = v_a^\top \tanh(W_a s_{i-1} + U_a h_j)$$
+$$
+a(s_{i-1}, h_j) = v_a^\top \tanh(W_a s_{i-1} + U_a h_j)
+$$
 
 with $W_a \in \mathbb{R}^{n' \times n}$, $U_a \in \mathbb{R}^{n' \times 2n}$, $v_a \in \mathbb{R}^{n'}$, where $n'$ is the alignment model's hidden size ($n' = 1000 = n$ in the paper, which is why A.1.2 writes the shapes with $n$). The two inputs are combined by adding their projections, which is why this is called additive attention. Because $U_a h_j$ does not depend on $i$, the paper precomputes it once per sentence.
 
 **Eq. 6.** Softmax over source positions for a fixed target step. Weights sum to 1 over $j$:
 
-$$\sum_{j} \alpha_{ij} = \frac{\sum_j \exp(e_{ij})}{\sum_k \exp(e_{ik})} = 1$$
+$$
+\sum_{j} \alpha_{ij} = \frac{\sum_j \exp(e_{ij})}{\sum_k \exp(e_{ik})} = 1
+$$
 
 The paper never writes this out; it follows from the formula. Rows of the alignment matrix sum to 1, columns do not, so nothing forces every source word to be used. Softmax provides positivity, so vectors are averaged rather than cancelled, and differentiability, which is what lets gradient reach $a$.
 
@@ -175,7 +201,9 @@ The paper reads $\alpha_{ij}$ as the probability that target word $i$ is aligned
 
 ### 3.2 Encoder: bidirectional RNN
 
-$$h_j = \left[ \overrightarrow{h}_j^\top ; \overleftarrow{h}_j^\top \right]^\top$$
+$$
+h_j = \left[ \overrightarrow{h}_j^\top ; \overleftarrow{h}_j^\top \right]^\top
+$$
 
 **Intuition, with "the bank was steep":**
 
@@ -206,11 +234,17 @@ The body describes the framework; the appendix describes what was actually train
 
 The paper's "gated hidden unit" is the GRU of Cho et al. (2014a). For the decoder:
 
-$$s_i = (1 - z_i) \circ s_{i-1} + z_i \circ \tilde{s}_i$$
+$$
+s_i = (1 - z_i) \circ s_{i-1} + z_i \circ \tilde{s}_i
+$$
 
-$$\tilde{s}_i = \tanh\left(W E y_{i-1} + U[r_i \circ s_{i-1}] + C c_i\right)$$
+$$
+\tilde{s}_i = \tanh\left(W E y_{i-1} + U[r_i \circ s_{i-1}] + C c_i\right)
+$$
 
-$$z_i = \sigma(W_z E y_{i-1} + U_z s_{i-1} + C_z c_i), \qquad r_i = \sigma(W_r E y_{i-1} + U_r s_{i-1} + C_r c_i)$$
+$$
+z_i = \sigma(W_z E y_{i-1} + U_z s_{i-1} + C_z c_i), \qquad r_i = \sigma(W_r E y_{i-1} + U_r s_{i-1} + C_r c_i)
+$$
 
 The context enters all three computations, through $C, C_z, C_r \in \mathbb{R}^{n \times 2n}$. The encoder uses the same equations without the $C$ terms.
 
@@ -218,7 +252,9 @@ The reset gate is applied **before** the matrix: $U[r \circ s]$. PyTorch's `nn.G
 
 ### Initial decoder state (A.2.2)
 
-$$s_0 = \tanh(W_s \overleftarrow{h}_1)$$
+$$
+s_0 = \tanh(W_s \overleftarrow{h}_1)
+$$
 
 The decoder starts from the backward RNN's state at position 1, which is the backward pass's summary of the whole sentence.
 
@@ -226,11 +262,17 @@ The decoder starts from the backward RNN's state at position 1, which is the bac
 
 A deep output with one maxout hidden layer:
 
-$$\tilde{t}_i = U_o s_{i-1} + V_o E y_{i-1} + C_o c_i \in \mathbb{R}^{2l}$$
+$$
+\tilde{t}_i = U_o s_{i-1} + V_o E y_{i-1} + C_o c_i \in \mathbb{R}^{2l}
+$$
 
-$$t_i = \left[\max(\tilde{t}_{i,2j-1}, \tilde{t}_{i,2j})\right]_{j=1}^{l}$$
+$$
+t_i = \left[\max(\tilde{t}_{i,2j-1}, \tilde{t}_{i,2j})\right]_{j=1}^{l}
+$$
 
-$$p(y_i \mid \ldots) \propto \exp(y_i^\top W_o t_i)$$
+$$
+p(y_i \mid \ldots) \propto \exp(y_i^\top W_o t_i)
+$$
 
 with $W_o \in \mathbb{R}^{K_y \times l}$. Maxout takes adjacent pairs and keeps the larger, halving $2l$ to $l$.
 
@@ -261,13 +303,13 @@ Consequence: with $v_a = 0$, every score starts at zero, so **attention begins u
 
 ### Training statistics (Table 2)
 
-| model | updates (x10^5) | epochs | hours |
+| model | updates ($\times 10^5$) | epochs | hours |
 | --- | --- | --- | --- |
 | RNNenc-30 | 8.46 | 6.4 | 109 |
 | RNNenc-50 | 6.00 | 4.5 | 108 |
 | RNNsearch-30 | 4.71 | 3.6 | 113 |
 | RNNsearch-50 | 2.88 | 2.2 | 111 |
-| RNNsearch-50* | 6.67 | 5.0 | 252 |
+| RNNsearch-50\* | 6.67 | 5.0 | 252 |
 
 The models were matched by **wall-clock time**, not by updates. RNNenc-30 received nearly three times as many updates as RNNsearch-50, which saw the data just over twice. The comparison therefore favours the baseline on updates, which makes the attention result stronger, not weaker.
 
@@ -319,7 +361,7 @@ Steps 1 to 10 and 12 are unchanged. Step 11 does not happen. The loss is the neg
 
 **Two uses in papers.**
 
-- **Over parameters, it states an objective.** $\theta^* = \arg\max_\theta \sum \log p(y \mid x; \theta)$ describes what training aims for. Nobody computes it; gradient descent approximates it.
+- **Over parameters, it states an objective.** $\theta^{\ast} = \arg\max_\theta \sum \log p(y \mid x; \theta)$ describes what training aims for. Nobody computes it; gradient descent approximates it.
 - **Over outputs, it is an action.** $y_i = \arg\max_y p(y \mid \ldots)$ is greedy decoding. It is evaluated literally, at inference only.
 
 Section 2 of this paper uses the first sense: translation is finding $\arg\max_{\mathbf{y}} p(\mathbf{y} \mid \mathbf{x})$, and generation is searching for it.
@@ -330,7 +372,9 @@ If a paper puts argmax inside the training loop, it owes you a gradient estimato
 
 ### Softmax
 
-$$\text{softmax}(z)_j = \frac{\exp(z_j / \tau)}{\sum_k \exp(z_k / \tau)}$$
+$$
+\text{softmax}(z)_j = \frac{\exp(z_j / \tau)}{\sum_k \exp(z_k / \tau)}
+$$
 
 A smooth approximation to argmax, not to max; the name is a misnomer. As $\tau \to 0$ it approaches a one-hot argmax, and at any $\tau > 0$ it is differentiable. The smooth version of max is logsumexp.
 
@@ -338,7 +382,9 @@ A smooth approximation to argmax, not to max; the name is a misnomer. As $\tau \
 
 Taking the best word at every step does not give the best sentence. The target is
 
-$$y^* = \arg\max_y \prod_i p(y_i \mid y_{<i}, x)$$
+$$
+y^{\ast} = \arg\max_y \prod_i p(y_i \mid y_{<i}, x)
+$$
 
 over $V^T$ candidates, which is intractable. Greedy maximises each factor on its own, but each choice changes what comes next, so a locally worse word can lead to a better sentence.
 
@@ -384,16 +430,16 @@ The test of the conjecture. A bottleneck predicts a specific failure: quality dr
 | RNNsearch-30 | 21.50 | 31.44 |
 | RNNencdec-50 | 17.82 | 26.71 |
 | RNNsearch-50 | 26.75 | 34.16 |
-| RNNsearch-50* | 28.45 | 36.15 |
+| RNNsearch-50\* | 28.45 | 36.15 |
 | Moses | 33.30 | 35.63 |
 
-**All** includes every test sentence. **No UNK** keeps only sentences with no unknown words in source or reference, and the models were barred from emitting `[UNK]` in that column. RNNsearch-50* was trained much longer, until dev performance stopped improving.
+**All** includes every test sentence. **No UNK** keeps only sentences with no unknown words in source or reference, and the models were barred from emitting `[UNK]` in that column. RNNsearch-50\* was trained much longer, until dev performance stopped improving.
 
 **Read the pairs.** Attention gains +7.57 at length 30 and +8.93 at length 50. RNNsearch-30 (21.50) beats RNNencdec-50 (17.82), which the paper itself points to: the attention model trained on short sentences outperforms the baseline trained on long ones.
 
-**The Moses row.** The paper's claim (Section 5.1) is that RNNsearch matches Moses when only sentences of known words are considered, and it notes that Moses additionally used a separate 418M-word monolingual corpus. On the No UNK column, RNNsearch-50* leads by 0.52 (36.15 against 35.63). On the All column, Moses leads by 4.85 (33.30 against 28.45). The abstract's "comparable" rests on the No UNK column.
+**The Moses row.** The paper's claim (Section 5.1) is that RNNsearch matches Moses when only sentences of known words are considered, and it notes that Moses additionally used a separate 418M-word monolingual corpus. On the No UNK column, RNNsearch-50\* leads by 0.52 (36.15 against 35.63). On the All column, Moses leads by 4.85 (33.30 against 28.45). The abstract's "comparable" rests on the No UNK column.
 
-**Reading beyond the paper.** Moses gains 2.33 from excluding unknown words; RNNsearch-50* gains 7.70. That asymmetry suggests the neural model's shortfall on the full set comes mainly from the 30k vocabulary limit rather than the architecture. This is an inference from the table, not a claim the paper makes, though the conclusion does name rare and unknown words as the main open challenge.
+**Reading beyond the paper.** Moses gains 2.33 from excluding unknown words; RNNsearch-50\* gains 7.70. That asymmetry suggests the neural model's shortfall on the full set comes mainly from the 30k vocabulary limit rather than the architecture. This is an inference from the table, not a claim the paper makes, though the conclusion does name rare and unknown words as the main open challenge.
 
 ### Moses
 
@@ -402,7 +448,7 @@ The open-source phrase-based SMT toolkit released by Koehn et al. in 2007, and t
 ### What the table cannot tell you
 
 - It does not test the bottleneck conjecture; averages hide the length effect. Figure 2 does that.
-- The 50* row was trained much longer (252 hours against about 110), so its +1.70 is a training-budget effect, and whether the baseline would gain similarly is not reported.
+- The 50\* row was trained much longer (252 hours against about 110), so its +1.70 is a training-budget effect, and whether the baseline would gain similarly is not reported.
 - Single runs, no variance. The 8-point gains are far beyond noise; the 0.5-point comparison with Moses is not.
 - Every RNNsearch row differs from RNNencdec in two ways: attention and a bidirectional encoder.
 
