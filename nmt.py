@@ -154,3 +154,62 @@ def iterate_batches(data, cfg):
         chunk = sorted(data[start : start + block], key=lambda x: len(x[0]))
         for b in range(0, len(chunk), cfg.batch_size):
             yield collate(chunk[b : b + cfg.batch_size])
+
+###############################
+# Model
+###############################
+
+class GatedUnit(nn.Module):
+    def __init__(self,input_dim,n,context_dim = 0):
+        super().__init__()
+        self.W = nn.Linear(input_dim, 3 * n) 
+        self.U_zr = nn.Linear(n, 2 * n, bias=False)  # holds the weights for both gates
+        self.U = nn.Linear(n, n, bias=False) # U holds the weight for the candidate state
+        self.C = nn.Linear(context_dim, 3 * n, bias=False) if context_dim else None
+
+    def forward(self,x,h_prev,c=None):
+        """
+        it takes the input x and the previous state h_prev and returns the new state
+        z: is the update gate
+        r: is the reset gate
+        """
+        proj = self.W(x)                          # W_z x, W_r x, W x (plus biases), stacked
+        if self.C is not None:
+            proj = proj + self.C(c)               # decoder only: add C_z c, C_r c, C c
+        p_z, p_r, p_h = proj.chunk(3, dim=-1)     # split input parts for z, r, candidate
+        u_z, u_r = self.U_zr(h_prev).chunk(2, dim=-1)   # U_z h, U_r h
+
+        z = torch.sigmoid(p_z + u_z)              # update gate
+        r = torch.sigmoid(p_r + u_r)              # reset gate
+        h_tilde = torch.tanh(p_h + self.U(r * h_prev))  # candidate, reset before U
+        return (1 - z) * h_prev + z * h_tilde     # blend old and new
+
+class Encoder(nn.Module):
+    def __init__(self, K_x, cfg):
+        super().__init__()
+        self.n = cfg.n
+        self.embedding = nn.Embedding(K_x, cfg.m, padding_idx=PAD)  # shared by both directions
+        self.forward_rnn = GatedUnit(cfg.m, cfg.n)
+        self.backward_rnn = GatedUnit(cfg.m, cfg.n)
+
+    def forward(self, src, src_mask):
+        B, T_x = src.shape
+        emb = self.embedding(src)
+
+        h = emb.new_zeros(B, self.n)
+        fwd = []
+        for j in range(T_x):
+            h_new = self.forward_rnn(emb[:, j], h)
+            h = torch.where(src_mask[:, j : j + 1], h_new, h)  # keep old state on padding
+            fwd.append(h)
+        h = emb.new_zeros(B, self.n)
+        bwd = [None] * T_x
+        for j in reversed(range(T_x)):
+            h_new = self.backward_rnn(emb[:, j], h)
+            h = torch.where(src_mask[:, j : j + 1], h_new, h) 
+            bwd[j] = h
+        fwd = torch.stack(fwd, dim=1)
+        bwd = torch.stack(bwd, dim=1) 
+        annotations = torch.cat([fwd, bwd], dim=-1)  
+        return annotations, bwd[:, 0]
+
