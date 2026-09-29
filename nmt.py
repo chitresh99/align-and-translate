@@ -388,3 +388,69 @@ def train(model, pairs, cfg, src_vocab, tgt_vocab, epochs, log_every=5):
             )
     return model
 
+#####################################
+# Decoding
+#####################################
+
+@torch.no_grad()
+def greedy_decode(model, src, cfg):
+    model.eval()
+    src_mask = src != PAD
+    annotations, U_h, s = model.encode(src, src_mask)  # computed once, reused every step
+    y = torch.tensor([SOS])
+    tokens, alphas = [], []
+
+    for _ in range(cfg.max_decode_len):
+        logits, s, alpha = model.decoder.step(y, s, annotations, U_h, src_mask)
+        alphas.append(alpha[0])
+        y = logits.argmax(dim=-1)
+        if y.item() == EOS:
+            break
+        tokens.append(y.item())
+
+    return tokens, alphas
+
+
+@torch.no_grad()
+def beam_search(model, src, cfg):
+    model.eval()
+    src_mask = src != PAD
+    annotations, U_h, s0 = model.encode(src, src_mask)
+
+    beams = [([], 0.0, s0, [])] 
+    finished = []
+
+    for _ in range(cfg.max_decode_len):
+        candidates = []
+        for tokens, score, s, alphas in beams:
+            last = torch.tensor([tokens[-1] if tokens else SOS])
+            logits, s_new, alpha = model.decoder.step(
+                last, s, annotations, U_h, src_mask
+            )
+            log_probs = torch.log_softmax(logits[0], dim=-1)
+            topk = torch.topk(log_probs, cfg.beam_width)
+            for lp, idx in zip(topk.values.tolist(), topk.indices.tolist()):
+                candidates.append(
+                    (tokens + [idx], score + lp, s_new, alphas + [alpha[0]])
+                )
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+
+        beams = []
+        for tokens, score, s, alphas in candidates:
+            if tokens[-1] == EOS:
+                finished.append((tokens[:-1], score, alphas))
+            else:
+                beams.append((tokens, score, s, alphas))
+            if len(beams) == cfg.beam_width:
+                break
+
+        if not beams:
+            break
+        if finished and max(f[1] for f in finished) >= beams[0][1]:
+            break
+
+    finished += [(t, sc, a) for t, sc, _, a in beams]
+    best = max(finished, key=lambda x: x[1])
+    return best[0], best[2]
+

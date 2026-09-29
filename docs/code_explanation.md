@@ -167,3 +167,114 @@ The full model: ties the encoder and decoder together and applies the paper's in
 - `self.decoder.step(tgt_in[:, i], s, annotations, U_h, src_mask)` runs one step, feeding in the reference word, not the model's own prediction. This is teacher forcing.
 - `logits.append(step_logits)` and `alphas.append(alpha)` save this step's outputs; `s` is carried to the next step.
 - `return torch.stack(logits, dim=1), torch.stack(alphas, dim=1)` returns logits `(B, T_y, K_y)` for the loss and the full alignment matrix `(B, T_y, T_x)`, where row `i` holds the attention weights used for target word `i`.
+
+## Training
+
+### Loss (`compute_loss`)
+
+Computes the loss for one batch.
+
+- `src_mask = src != PAD` marks the real source tokens, used by the encoder and by attention.
+- `tgt_in = tgt[:, :-1]` drops the last token, giving the decoder inputs `<sos> y1 ... yT`.
+- `tgt_out = tgt[:, 1:]` drops the first token, giving the targets `y1 ... yT <eos>`. The shift by one means that at every step the correct answer is the next word.
+- `logits, _ = model(src, src_mask, tgt_in)` runs the full model with teacher forcing: every step is fed the reference word, not the model's own prediction. Logits have shape `(B, T_y, K_y)`; the attention weights are not needed here and are discarded.
+- `logits.reshape(-1, logits.size(-1))` flattens all positions of all sentences into one list, `(B * T_y, K_y)`.
+- `tgt_out.reshape(-1)` flattens the targets the same way, `(B * T_y,)`, so each row of logits lines up with its correct word.
+- `nn.functional.cross_entropy(...)` applies a softmax over the vocabulary and takes the negative log probability of the correct word at every position.
+- `ignore_index=PAD` skips padded target positions, so padding adds nothing to the loss or the gradient.
+- `reduction="sum"` adds the losses of every real token in the batch into one number.
+- `num_tokens = (tgt_out != PAD).sum().item()` counts the real target tokens, used for per-token logging.
+- `return loss_sum / src.size(0), loss_sum.item(), num_tokens` returns three things:
+  - the loss per sentence, which is what `backward()` uses. This matches the paper's objective, the log-likelihood of each sentence averaged over the batch.
+  - the raw sum as a plain Python number, for logging without keeping the graph alive.
+  - the token count, so `train` can compute loss per token across the epoch.
+
+### Training loop (`train`)
+
+Runs the optimiser over the data for a number of epochs.
+
+- `optimizer = torch.optim.Adadelta(model.parameters(), lr=1.0, rho=cfg.rho, eps=cfg.eps)` builds the paper's optimiser (Appendix B.2). Zeiler's Adadelta has no learning rate; PyTorch's version multiplies the update by `lr`, so `lr=1.0` recovers the original.
+- `data = [tensorize(p, src_vocab, tgt_vocab) for p in pairs]` converts every pair of word lists into id lists, adding `<eos>` to the source and `<sos>`, `<eos>` to the target.
+- `random.Random(cfg.seed).shuffle(data)` shuffles the data once before training, as in Appendix B.2. A seeded generator makes the order reproducible.
+- `for epoch in range(1, epochs + 1):` loops over full passes of the data. The data is not reshuffled between epochs.
+- `model.train()` puts the model in training mode. This model has no dropout or batch norm, so it changes nothing here, but it is the standard habit and undoes the `model.eval()` set by the decoding functions.
+- `total_loss, total_tokens = 0.0, 0` reset the epoch's running totals for logging.
+- `for src, tgt in iterate_batches(data, cfg):` gets length-sorted, padded batches one at a time.
+- `optimizer.zero_grad()` clears the gradients left over from the previous batch. PyTorch accumulates gradients by default, so without this they would add up.
+- `loss, loss_sum, n_tokens = compute_loss(model, src, tgt)` runs the model and computes the loss.
+- `loss.backward()` backpropagates through the whole model: decoder, attention, alignment MLP and both encoder directions.
+- `torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip_threshold)` treats all gradients as one vector and, if its L2 norm is above 1, scales it down to norm 1. The direction is unchanged. This guards against exploding gradients from backprop through time.
+- `optimizer.step()` applies the Adadelta update to every parameter.
+- `total_loss += loss_sum` and `total_tokens += n_tokens` accumulate the epoch's totals.
+- `if epoch % log_every == 0 or epoch == 1:` logs on the first epoch and then every `log_every` epochs.
+- `per_token = total_loss / total_tokens` is the average loss per real target token across the epoch. Per token, not per sentence, so the number is comparable across batches and datasets with different sentence lengths.
+- `math.exp(per_token)` is the perplexity: roughly how many words the model is choosing between on average at each step. 1 would mean it is always certain and correct.
+- `return model` returns the trained model.
+
+## Decoding
+
+Both functions translate one source sentence at a time (batch size 1) and return the output token ids plus the attention rows used to produce them.
+
+### Greedy decoding (`greedy_decode`)
+
+Picks the single most likely word at every step.
+
+- `@torch.no_grad()` turns off gradient tracking for the whole function. Nothing is trained here, so this saves memory and time.
+- `model.eval()` puts the model in evaluation mode.
+- `src_mask = src != PAD` marks the real source tokens.
+- `annotations, U_h, s = model.encode(src, src_mask)` encodes the source once. The annotations, the cached $U_a h_j$ and the initial state $s_0$ are reused at every step.
+- `y = torch.tensor([SOS])` starts the decoder with the `<sos>` token, shape `(1,)`.
+- `tokens, alphas = [], []` collect the output words and the attention row for each step.
+- `for _ in range(cfg.max_decode_len):` caps the output length so a model that never emits `<eos>` cannot loop forever.
+- `logits, s, alpha = model.decoder.step(y, s, annotations, U_h, src_mask)` runs one decoder step: attend, predict, update the state.
+- `alphas.append(alpha[0])` saves this step's attention row. It is saved before the `<eos>` check, so the final `<eos>` step is included, matching the paper's alignment figures.
+- `y = logits.argmax(dim=-1)` picks the highest-scoring word. This is the only hard choice in the whole pipeline, and it happens only at inference. The chosen word becomes the next step's input.
+- `if y.item() == EOS: break` stops once the model ends the sentence. `<eos>` itself is not added to the output.
+- `tokens.append(y.item())` adds the word to the translation.
+- `return tokens, alphas` returns the word ids and the attention rows.
+
+### Beam search (`beam_search`)
+
+Keeps the `beam_width` best partial translations at every step instead of committing to one word, because the best word at each step does not always lead to the best sentence.
+
+Each hypothesis is a tuple `(tokens, score, state, alphas)`: the words so far, the total log probability, the decoder state, and the attention rows that produced those words.
+
+#### Setup
+
+- `@torch.no_grad()` and `model.eval()` as in greedy decoding.
+- `annotations, U_h, s0 = model.encode(src, src_mask)` encodes the source once. Every hypothesis reads the same annotations.
+- `beams = [([], 0.0, s0, [])]` starts with one empty hypothesis: no words, score 0 (log of probability 1), the initial state, no attention rows.
+- `finished = []` collects hypotheses that have emitted `<eos>`.
+
+#### Expanding every beam
+
+- `for _ in range(cfg.max_decode_len):` caps the output length.
+- `candidates = []` collects every possible one-word extension of every live beam.
+- `for tokens, score, s, alphas in beams:` visits each live hypothesis.
+- `last = torch.tensor([tokens[-1] if tokens else SOS])` is the word to feed in: the hypothesis's last word, or `<sos>` if it is still empty.
+- `model.decoder.step(last, s, annotations, U_h, src_mask)` runs one step from this hypothesis's own state. Beams are stepped one at a time, not batched, which is simple but slow for large beams.
+- `log_probs = torch.log_softmax(logits[0], dim=-1)` turns logits into log probabilities over the vocabulary. Log space means scores are added instead of multiplied, which avoids underflow.
+- `topk = torch.topk(log_probs, cfg.beam_width)` keeps only the `beam_width` best next words for this hypothesis. No more than that can survive the pruning below, so looking further is wasted work.
+- `candidates.append((tokens + [idx], score + lp, s_new, alphas + [alpha[0]]))` creates one new hypothesis per next word: extended words, updated total score, the new state, and the attention rows extended by this step's row. Each hypothesis carries its own rows, so the heatmap of the winning sentence is the one that actually produced it.
+
+#### Pruning
+
+- `candidates.sort(key=lambda x: x[1], reverse=True)` orders all candidates from every beam by total score, best first.
+- `beams = []` will hold the survivors.
+- `for tokens, score, s, alphas in candidates:` walks down the sorted list.
+- `if tokens[-1] == EOS: finished.append((tokens[:-1], score, alphas))` moves a hypothesis that just ended into `finished`, with `<eos>` stripped from its words.
+- `else: beams.append((tokens, score, s, alphas))` keeps an unfinished hypothesis alive.
+- `if len(beams) == cfg.beam_width: break` stops once `beam_width` live hypotheses are kept. Finished ones do not count against this, so the beam stays full.
+
+#### Stopping
+
+- `if not beams: break` stops if every candidate has finished.
+- `if finished and max(f[1] for f in finished) >= beams[0][1]: break` stops early once the best finished hypothesis scores at least as well as the best live one. Adding a word adds a log probability, which is never positive, so a live score can only fall. Nothing still running can overtake the finished winner.
+
+#### Choosing the result
+
+- `finished += [(t, sc, a) for t, sc, _, a in beams]` adds any hypotheses still running when the length cap was reached, so there is always a candidate. The state is dropped since it is no longer needed.
+- `best = max(finished, key=lambda x: x[1])` picks the hypothesis with the highest total log probability.
+- `return best[0], best[2]` returns its words and its attention rows.
+
+Note: scores are raw sums of log probabilities with no length normalisation. Every extra word lowers the score, so this search slightly favours shorter translations. The paper does not state its beam width or whether it normalises by length.
